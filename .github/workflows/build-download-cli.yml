@@ -11,8 +11,35 @@ env:
   API_BASE: ${{ secrets.API_BASE }}
 
 jobs:
+  prepare:
+    name: Create version tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create and push version tag
+        id: tag
+        run: |
+          VERSION="$(date -u +%Y.%m.%d).${{ github.run_number }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Skip if tag already exists (e.g. on workflow re-run)
+          if git ls-remote --tags origin "refs/tags/${VERSION}" | grep -q "${VERSION}"; then
+            echo "Tag ${VERSION} already exists, skipping."
+          else
+            git tag "$VERSION"
+            git push origin "$VERSION"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Version: ${VERSION}"
+
   build:
     name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: prepare
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -61,10 +88,11 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "0"
+          BUILD_VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           test -n "$DOWNLOADER_API_ENDPOINT"
 
-          VERSION="$(date -u +%Y.%m.%d).${{ github.run_number }}"
+          VERSION="$BUILD_VERSION"
           COMMIT="${GITHUB_SHA::8}"
           BUILD_DATE="$(date -u +%Y-%m-%d)"
           MODULE="github.com/mjudcd-ct-r-d-labeling/labeling_download_cli"
@@ -96,6 +124,7 @@ jobs:
       - name: Upload to release server
         env:
           CLI_RELEASE_PUBLISH_TOKEN: ${{ secrets.CLI_RELEASE_PUBLISH_TOKEN }}
+          UPLOAD_VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           test -n "$CLI_RELEASE_PUBLISH_TOKEN"
           test -n "$API_BASE"
@@ -103,7 +132,7 @@ jobs:
           BINARY="dist/mju-dataset-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}"
           FILE_NAME="mju-dataset-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}"
           OS_BUILD_TYPE="${{ matrix.os_build_type }}"
-          VERSION="$(date -u +%Y.%m.%d).${{ github.run_number }}"
+          VERSION="$UPLOAD_VERSION"
 
           SHA256=$(sha256sum "$BINARY" | awk '{print $1}')
           FILE_SIZE=$(stat -c%s "$BINARY")
@@ -149,12 +178,14 @@ jobs:
 
   summary:
     name: Show install commands
-    needs: build
+    needs: [prepare, build]
     runs-on: ubuntu-latest
     steps:
       - name: Print install commands
+        env:
+          SUMMARY_VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          VERSION="$(date -u +%Y.%m.%d).${{ github.run_number }}"
+          VERSION="$SUMMARY_VERSION"
 
           SCRIPT_BASE="https://raw.githubusercontent.com/mjudcd-ct-r-d-labeling/labeling_download_cli/main/scripts"
 
@@ -177,20 +208,3 @@ jobs:
           echo "Linux/macOS : curl -fsSL ${SCRIPT_BASE}/install.sh | sh"
           echo "Windows     : irm ${SCRIPT_BASE}/install.ps1 | iex"
 
-  tag:
-    name: Create release tag
-    needs: [build, summary]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Push version tag
-        run: |
-          VERSION="$(date -u +%Y.%m.%d).${{ github.run_number }}"
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "$VERSION"
-          git push origin "$VERSION"
-          echo "Tagged ${VERSION}"
