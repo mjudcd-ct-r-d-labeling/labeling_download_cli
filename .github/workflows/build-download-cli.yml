@@ -23,15 +23,6 @@ jobs:
           - goos: linux
             goarch: arm64
             ext: ""
-          - goos: darwin
-            goarch: amd64
-            ext: ""
-          - goos: darwin
-            goarch: arm64
-            ext: ""
-          - goos: windows
-            goarch: amd64
-            ext: ".exe"
 
     steps:
       - uses: actions/checkout@v4
