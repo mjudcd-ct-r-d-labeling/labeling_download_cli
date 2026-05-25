@@ -3,7 +3,6 @@ name: build-download-cli
 on:
   push:
     branches: [main]
-    tags: ["v*.*.*"]
   workflow_dispatch:
 
 env:
@@ -65,11 +64,7 @@ jobs:
         run: |
           test -n "$DOWNLOADER_API_ENDPOINT"
 
-          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
-            VERSION="${GITHUB_REF_NAME#v}"
-          else
-            VERSION="0.0.0-dev-${GITHUB_SHA::8}"
-          fi
+          VERSION="$(date -u +%Y.%m.%d).${{ github.run_number }}"
           COMMIT="${GITHUB_SHA::8}"
           BUILD_DATE="$(date -u +%Y-%m-%d)"
           MODULE="github.com/mjudcd-ct-r-d-labeling/labeling_download_cli"
@@ -108,23 +103,11 @@ jobs:
           BINARY="dist/mju-dataset-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}"
           FILE_NAME="mju-dataset-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}"
           OS_BUILD_TYPE="${{ matrix.os_build_type }}"
-
-          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
-            VERSION="${GITHUB_REF_NAME#v}"
-          else
-            VERSION="0.0.0-dev-${GITHUB_SHA::8}"
-          fi
+          VERSION="$(date -u +%Y.%m.%d).${{ github.run_number }}"
 
           SHA256=$(sha256sum "$BINARY" | awk '{print $1}')
           FILE_SIZE=$(stat -c%s "$BINARY")
           RELEASE_NOTES="Build: ${GITHUB_SHA::8} ($(date -u +%Y-%m-%d))"
-
-          # For dev versions, delete any existing entry first (allows re-upload on every push)
-          if [[ "$VERSION" == 0.0.0-dev-* ]]; then
-            curl -s -X DELETE \
-              -H "Authorization: Bearer $CLI_RELEASE_PUBLISH_TOKEN" \
-              "${API_BASE}/admin/cli-releases/${OS_BUILD_TYPE}/${VERSION}" || true
-          fi
 
           echo "Uploading ${FILE_NAME} as ${OS_BUILD_TYPE} v${VERSION}..."
           HTTP_STATUS=$(curl -s -o /tmp/chunk_resp.json -w "%{http_code}" \
@@ -171,11 +154,7 @@ jobs:
     steps:
       - name: Print install commands
         run: |
-          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
-            VERSION="${GITHUB_REF_NAME#v}"
-          else
-            VERSION="0.0.0-dev-${GITHUB_SHA::8}"
-          fi
+          VERSION="$(date -u +%Y.%m.%d).${{ github.run_number }}"
 
           SCRIPT_BASE="https://raw.githubusercontent.com/mjudcd-ct-r-d-labeling/labeling_download_cli/main/scripts"
 
@@ -197,3 +176,21 @@ jobs:
           echo "=== mju-dataset v${VERSION} build completed ==="
           echo "Linux/macOS : curl -fsSL ${SCRIPT_BASE}/install.sh | sh"
           echo "Windows     : irm ${SCRIPT_BASE}/install.ps1 | iex"
+
+  tag:
+    name: Create release tag
+    needs: [build, summary]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Push version tag
+        run: |
+          VERSION="$(date -u +%Y.%m.%d).${{ github.run_number }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$VERSION"
+          git push origin "$VERSION"
+          echo "Tagged ${VERSION}"
