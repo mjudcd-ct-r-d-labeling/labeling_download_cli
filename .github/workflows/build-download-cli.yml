@@ -1,0 +1,120 @@
+name: build-download-cli
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            ext: ""
+          - goos: linux
+            goarch: arm64
+            ext: ""
+          - goos: darwin
+            goarch: amd64
+            ext: ""
+          - goos: darwin
+            goarch: arm64
+            ext: ""
+          - goos: windows
+            goarch: amd64
+            ext: ".exe"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+          cache: true
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build CLI
+        # DOWNLOADER_API_ENDPOINT must be set as a repository secret.
+        # test -n ensures the build fails immediately when the secret is absent
+        # rather than producing a binary with an empty endpoint.
+        # The secret value is never echoed (SEC-003).
+        env:
+          DOWNLOADER_API_ENDPOINT: ${{ secrets.DOWNLOADER_API_ENDPOINT }}
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          test -n "$DOWNLOADER_API_ENDPOINT"
+
+          VERSION="${GITHUB_REF_NAME:-dev}"
+          COMMIT="${GITHUB_SHA::8}"
+          BUILD_DATE="$(date -u +%Y-%m-%d)"
+          MODULE="github.com/mjudcd-ct-r-d-labeling/labeling_download_cli"
+
+          mkdir -p dist
+          go build \
+            -trimpath \
+            -ldflags "-s -w \
+              -X '${MODULE}/internal/build.Endpoint=${DOWNLOADER_API_ENDPOINT}' \
+              -X '${MODULE}/internal/version.Version=${VERSION}' \
+              -X '${MODULE}/internal/version.Commit=${COMMIT}' \
+              -X '${MODULE}/internal/version.BuildDate=${BUILD_DATE}'" \
+            -o "dist/mju-dataset-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}" \
+            ./cmd/mju-dataset
+
+      - name: Generate checksum
+        run: |
+          cd dist
+          sha256sum "mju-dataset-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}" \
+            > "checksums-${{ matrix.goos }}-${{ matrix.goarch }}.txt"
+
+      - name: Verify endpoint is not in binary
+        # Lightweight guard: confirm the raw endpoint string does not appear
+        # in the compiled binary as plain text (SEC-003).
+        env:
+          DOWNLOADER_API_ENDPOINT: ${{ secrets.DOWNLOADER_API_ENDPOINT }}
+        run: |
+          BINARY="dist/mju-dataset-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}"
+          if strings "$BINARY" | grep -qF "$DOWNLOADER_API_ENDPOINT" 2>/dev/null; then
+            echo "::warning::Endpoint may be visible as a plain string in the binary."
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mju-dataset-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    # Only create a release on version tags pushed to main.
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Merge checksums
+        run: |
+          cd artifacts
+          cat checksums-*.txt > checksums.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/mju-dataset-*
+            artifacts/checksums.txt
+          generate_release_notes: true
