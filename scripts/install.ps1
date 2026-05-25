@@ -5,6 +5,11 @@
 # It fetches the latest release from the distribution API and downloads
 # the binary via a presigned URL.
 #Requires -Version 5.1
+param(
+    # A specific version can be passed as an argument:
+    # & ([scriptblock]::Create((irm '<url>/install.ps1'))) -Version '2026.05.26.42'
+    [string]$Version = ""
+)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
@@ -19,15 +24,17 @@ if (-not (Test-Path $InstallDir)) {
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 }
 
-# ── Fetch latest version from Git tags ───────────────────────────────────────────────
-Write-Host "Fetching latest release for ${OsBuildType}..."
-$TagsUrl = "https://api.github.com/repos/$GhRepo/tags?per_page=1"
-$Tags    = Invoke-RestMethod -Uri $TagsUrl `
-    -Headers @{ 'Accept' = 'application/vnd.github+json'; 'User-Agent' = 'mju-dataset-installer' }
-$Version = $Tags[0].name
+# ── Fetch latest version from Git tags (인자가 없을 때만) ────────────────────────────────
 if (-not $Version) {
-    Write-Error "Failed to determine latest version from GitHub tags."
-    exit 1
+    Write-Host "Fetching latest release for ${OsBuildType}..."
+    $TagsUrl = "https://api.github.com/repos/$GhRepo/tags?per_page=1"
+    $Tags    = Invoke-RestMethod -Uri $TagsUrl `
+        -Headers @{ 'Accept' = 'application/vnd.github+json'; 'User-Agent' = 'mju-dataset-installer' }
+    $Version = $Tags[0].name
+    if (-not $Version) {
+        Write-Error "Failed to determine latest version from GitHub tags."
+        exit 1
+    }
 }
 
 # ── Fetch download URL from release server ────────────────────────────────────────────

@@ -163,19 +163,19 @@ jobs:
             echo ""
             echo "### Linux / macOS"
             echo '```sh'
-            echo "curl -fsSL ${SCRIPT_BASE}/install.sh | sh"
+            echo "curl -fsSL ${SCRIPT_BASE}/install.sh | sh -s -- ${VERSION}"
             echo '```'
             echo ""
             echo "### Windows (PowerShell)"
             echo '```powershell'
-            echo "irm ${SCRIPT_BASE}/install.ps1 | iex"
+            echo "& ([scriptblock]::Create((irm '${SCRIPT_BASE}/install.ps1'))) -Version '${VERSION}'"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
           echo ""
           echo "=== mju-dataset v${VERSION} build completed ==="
-          echo "Linux/macOS : curl -fsSL ${SCRIPT_BASE}/install.sh | sh"
-          echo "Windows     : irm ${SCRIPT_BASE}/install.ps1 | iex"
+          echo "Linux/macOS : curl -fsSL ${SCRIPT_BASE}/install.sh | sh -s -- ${VERSION}"
+          echo "Windows     : & ([scriptblock]::Create((irm '${SCRIPT_BASE}/install.ps1'))) -Version '${VERSION}'"
 
   tag:
     name: Create release tag

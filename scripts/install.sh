@@ -35,15 +35,21 @@ esac
 
 OS_BUILD_TYPE="${OS}-${ARCH}"
 
-# ── Fetch latest version from Git tags ───────────────────────────────────────
-echo "Fetching latest release for ${OS_BUILD_TYPE}..."
-VERSION=$(curl -fsSL "https://api.github.com/repos/${GH_REPO}/tags?per_page=1" \
-  -H "Accept: application/vnd.github+json" \
-  | grep -o '"name":"[^"]*"' | head -1 | sed 's/"name":"//;s/"$//')
+# ── Resolve version ───────────────────────────────────────────────────────────
+# A specific version can be passed as the first argument:
+#   curl -fsSL <url>/install.sh | sh -s -- 2026.05.26.42
+VERSION="${1:-}"
 
 if [ -z "$VERSION" ]; then
-  echo "Failed to determine latest version from GitHub tags."
-  exit 1
+  echo "Fetching latest release for ${OS_BUILD_TYPE}..."
+  VERSION=$(curl -fsSL "https://api.github.com/repos/${GH_REPO}/tags?per_page=1" \
+    -H "Accept: application/vnd.github+json" \
+    | grep -o '"name":"[^"]*"' | head -1 | sed 's/"name":"//;s/"$//')
+
+  if [ -z "$VERSION" ]; then
+    echo "Failed to determine latest version from GitHub tags."
+    exit 1
+  fi
 fi
 
 # ── Fetch download URL from release server ────────────────────────────────────
