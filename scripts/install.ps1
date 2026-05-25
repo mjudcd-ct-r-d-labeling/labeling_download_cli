@@ -2,15 +2,15 @@
 # Usage: irm <install_script_url> | iex
 #
 # This script does NOT contain the labeling server address.
-# It only downloads the CLI binary from GitHub Releases.
+# It fetches the latest release from the distribution API and downloads
+# the binary via a presigned URL.
 #Requires -Version 5.1
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$Repo    = "mjudcd-ct-r-d-labeling/labeling_download_cli"
-$Binary  = "mju-dataset"
-$Asset   = "mju-dataset-windows-amd64.exe"
-$ChecksumFile = "checksums-windows-amd64.txt"
+$ApiBase     = "https://mjudcd-grac-api.newlearn.ai.kr"
+$Binary      = "mju-dataset"
+$OsBuildType = "windows-amd64"
 
 # ── Install directory ─────────────────────────────────────────────────────────
 $InstallDir = Join-Path $env:LOCALAPPDATA "mju-dataset"
@@ -18,49 +18,46 @@ if (-not (Test-Path $InstallDir)) {
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 }
 
-# ── Resolve latest release tag ────────────────────────────────────────────────
-Write-Host "Fetching latest release..."
-$ApiUrl  = "https://api.github.com/repos/$Repo/releases/latest"
-$Release = Invoke-RestMethod -Uri $ApiUrl -Headers @{ 'User-Agent' = 'mju-dataset-installer' }
-$Tag     = $Release.tag_name
-if (-not $Tag) {
-    Write-Error "Failed to determine the latest release."
+# ── Fetch latest version info ─────────────────────────────────────────────────
+Write-Host "Fetching latest release for ${OsBuildType}..."
+$LatestUrl = "${ApiBase}/cli-releases/latest?os_build_type=${OsBuildType}&current_version=0.0.0"
+$Latest    = Invoke-RestMethod -Uri $LatestUrl -Headers @{ 'User-Agent' = 'mju-dataset-installer' }
+
+$Version     = $Latest.version
+$DownloadUrl = $Latest.download_url
+$Sha256      = $Latest.sha256
+
+if (-not $Version -or -not $DownloadUrl) {
+    Write-Error "Failed to fetch latest release information."
     exit 1
 }
 
-Write-Host "Installing ${Binary} ${Tag} (windows/amd64)..."
-$BaseUrl = "https://github.com/$Repo/releases/download/$Tag"
+Write-Host "Installing ${Binary} v${Version} (${OsBuildType})..."
 
 # ── Download to a temp directory ──────────────────────────────────────────────
 $TmpDir = Join-Path $env:TEMP ([System.IO.Path]::GetRandomFileName())
 New-Item -ItemType Directory -Path $TmpDir -Force | Out-Null
 
 try {
-    $BinaryPath   = Join-Path $TmpDir $Asset
-    $ChecksumPath = Join-Path $TmpDir $ChecksumFile
+    $BinaryPath = Join-Path $TmpDir "${Binary}.exe"
 
     Write-Host "Downloading binary..."
-    Invoke-WebRequest -Uri "$BaseUrl/$Asset"        -OutFile $BinaryPath   -UseBasicParsing
-    Write-Host "Downloading checksum..."
-    Invoke-WebRequest -Uri "$BaseUrl/$ChecksumFile" -OutFile $ChecksumPath -UseBasicParsing
+    Invoke-WebRequest -Uri $DownloadUrl -OutFile $BinaryPath -UseBasicParsing
 
     # ── Verify SHA-256 ────────────────────────────────────────────────────────
-    Write-Host "Verifying checksum..."
-    $ExpectedLine = Get-Content $ChecksumPath | Where-Object { $_ -match $Asset }
-    if (-not $ExpectedLine) {
-        Write-Error "Checksum entry for $Asset not found in $ChecksumFile."
-        exit 1
-    }
-    $Expected = ($ExpectedLine -split '\s+')[0].ToLower()
-    $Actual   = (Get-FileHash -Algorithm SHA256 -Path $BinaryPath).Hash.ToLower()
-    if ($Actual -ne $Expected) {
-        Write-Error "Checksum mismatch. The download may be corrupt or tampered.`nExpected: $Expected`nActual:   $Actual"
-        exit 1
+    if ($Sha256) {
+        Write-Host "Verifying checksum..."
+        $Actual = (Get-FileHash -Algorithm SHA256 $BinaryPath).Hash.ToLower()
+        if ($Actual -ne $Sha256.ToLower()) {
+            Write-Error "Checksum verification failed.`nExpected: $Sha256`nActual:   $Actual"
+            exit 1
+        }
+        Write-Host "Checksum OK"
     }
 
     # ── Install ───────────────────────────────────────────────────────────────
     $Dest = Join-Path $InstallDir "${Binary}.exe"
-    Copy-Item -Path $BinaryPath -Destination $Dest -Force
+    Copy-Item $BinaryPath $Dest -Force
 
 } finally {
     Remove-Item -Recurse -Force $TmpDir -ErrorAction SilentlyContinue
@@ -80,5 +77,5 @@ if ($UserPath -notlike "*$InstallDir*") {
 }
 
 Write-Host ""
-Write-Host "${Binary} installed successfully to $InstallDir\${Binary}.exe"
+Write-Host "${Binary} v${Version} installed to $InstallDir\${Binary}.exe"
 & (Join-Path $InstallDir "${Binary}.exe") --version

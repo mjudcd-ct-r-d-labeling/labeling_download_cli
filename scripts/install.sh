@@ -3,10 +3,11 @@
 # Usage: curl -fsSL <install_script_url> | sh
 #
 # This script does NOT contain the labeling server address.
-# It only downloads the CLI binary from GitHub Releases.
+# It fetches the latest release from the distribution API and downloads
+# the binary via a presigned URL.
 set -e
 
-REPO="mjudcd-ct-r-d-labeling/labeling_download_cli"
+API_BASE="https://mjudcd-grac-api.newlearn.ai.kr"
 BINARY="mju-dataset"
 INSTALL_DIR="/usr/local/bin"
 
@@ -16,8 +17,6 @@ case "$OS" in
   linux|darwin) ;;
   *)
     echo "Unsupported operating system: $OS"
-    echo "Please download the binary manually from:"
-    echo "  https://github.com/${REPO}/releases/latest"
     exit 1
     ;;
 esac
@@ -29,54 +28,61 @@ case "$ARCH" in
   aarch64|arm64)   ARCH="arm64" ;;
   *)
     echo "Unsupported architecture: $ARCH"
-    echo "Please download the binary manually from:"
-    echo "  https://github.com/${REPO}/releases/latest"
     exit 1
     ;;
 esac
 
-ASSET="${BINARY}-${OS}-${ARCH}"
-CHECKSUM_FILE="checksums-${OS}-${ARCH}.txt"
+OS_BUILD_TYPE="${OS}-${ARCH}"
 
-# ── Resolve latest release tag ───────────────────────────────────────────────
-echo "Fetching latest release..."
-LATEST=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-  | grep '"tag_name"' \
-  | sed -E 's/.*"([^"]+)".*/\1/')
+# ── Fetch latest version info ─────────────────────────────────────────────────
+echo "Fetching latest release for ${OS_BUILD_TYPE}..."
+LATEST_JSON=$(curl -fsSL \
+  "${API_BASE}/cli-releases/latest?os_build_type=${OS_BUILD_TYPE}&current_version=0.0.0")
 
-if [ -z "$LATEST" ]; then
-  echo "Failed to determine the latest release. Check your internet connection."
+VERSION=$(printf '%s' "$LATEST_JSON" | grep -o '"version":"[^"]*"' \
+  | sed 's/"version":"//;s/"$//')
+DOWNLOAD_URL=$(printf '%s' "$LATEST_JSON" | grep -o '"download_url":"[^"]*"' \
+  | sed 's/"download_url":"//;s/"$//')
+SHA256=$(printf '%s' "$LATEST_JSON" | grep -o '"sha256":"[^"]*"' \
+  | sed 's/"sha256":"//;s/"$//')
+
+if [ -z "$VERSION" ] || [ -z "$DOWNLOAD_URL" ]; then
+  echo "Failed to fetch latest release information."
+  echo "Response: $LATEST_JSON"
   exit 1
 fi
 
-echo "Installing ${BINARY} ${LATEST} (${OS}/${ARCH})..."
-
-BASE_URL="https://github.com/${REPO}/releases/download/${LATEST}"
+echo "Installing ${BINARY} v${VERSION} (${OS_BUILD_TYPE})..."
 
 # ── Download to a temp directory ─────────────────────────────────────────────
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-curl -fsSL --progress-bar "${BASE_URL}/${ASSET}"        -o "${TMP}/${ASSET}"
-curl -fsSL               "${BASE_URL}/${CHECKSUM_FILE}" -o "${TMP}/${CHECKSUM_FILE}"
+curl -fsSL --progress-bar "${DOWNLOAD_URL}" -o "${TMP}/${BINARY}"
 
 # ── Verify checksum ───────────────────────────────────────────────────────────
-echo "Verifying checksum..."
-( cd "$TMP" && sha256sum -c "${CHECKSUM_FILE}" --ignore-missing ) || {
-  echo "Checksum verification failed. The download may be corrupt or tampered."
-  exit 1
-}
+if [ -n "$SHA256" ]; then
+  echo "Verifying checksum..."
+  ACTUAL=$(sha256sum "${TMP}/${BINARY}" | awk '{print $1}')
+  if [ "$ACTUAL" != "$SHA256" ]; then
+    echo "Checksum verification failed. The download may be corrupt or tampered."
+    echo "Expected: $SHA256"
+    echo "Actual:   $ACTUAL"
+    exit 1
+  fi
+  echo "Checksum OK"
+fi
 
 # ── Install ───────────────────────────────────────────────────────────────────
-chmod +x "${TMP}/${ASSET}"
+chmod +x "${TMP}/${BINARY}"
 
 if [ -w "$INSTALL_DIR" ]; then
-  mv "${TMP}/${ASSET}" "${INSTALL_DIR}/${BINARY}"
+  mv "${TMP}/${BINARY}" "${INSTALL_DIR}/${BINARY}"
 else
   echo "Installing to ${INSTALL_DIR} (requires sudo)..."
-  sudo mv "${TMP}/${ASSET}" "${INSTALL_DIR}/${BINARY}"
+  sudo mv "${TMP}/${BINARY}" "${INSTALL_DIR}/${BINARY}"
 fi
 
 echo ""
-echo "${BINARY} installed successfully to ${INSTALL_DIR}/${BINARY}"
+echo "${BINARY} v${VERSION} installed to ${INSTALL_DIR}/${BINARY}"
 "${INSTALL_DIR}/${BINARY}" --version

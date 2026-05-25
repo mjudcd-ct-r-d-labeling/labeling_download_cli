@@ -3,11 +3,13 @@ name: build-download-cli
 on:
   push:
     branches: [main]
+    tags: ["v*.*.*"]
   workflow_dispatch:
 
 env:
   # Use Node.js 24 for actions before the forced migration on 2026-06-02.
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  API_BASE: ${{ secrets.API_BASE }}
 
 jobs:
   build:
@@ -20,9 +22,23 @@ jobs:
           - goos: linux
             goarch: amd64
             ext: ""
+            os_build_type: linux-amd64
           - goos: linux
             goarch: arm64
             ext: ""
+            os_build_type: linux-arm64
+          - goos: darwin
+            goarch: amd64
+            ext: ""
+            os_build_type: darwin-amd64
+          - goos: darwin
+            goarch: arm64
+            ext: ""
+            os_build_type: darwin-arm64
+          - goos: windows
+            goarch: amd64
+            ext: ".exe"
+            os_build_type: windows-amd64
 
     steps:
       - uses: actions/checkout@v4
@@ -49,7 +65,11 @@ jobs:
         run: |
           test -n "$DOWNLOADER_API_ENDPOINT"
 
-          VERSION="${GITHUB_REF_NAME:-dev}"
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="0.0.0-dev-${GITHUB_SHA::8}"
+          fi
           COMMIT="${GITHUB_SHA::8}"
           BUILD_DATE="$(date -u +%Y-%m-%d)"
           MODULE="github.com/mjudcd-ct-r-d-labeling/labeling_download_cli"
@@ -66,12 +86,6 @@ jobs:
             -o "dist/mju-dataset-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}" \
             ./cmd/mju-dataset
 
-      - name: Generate checksum
-        run: |
-          cd dist
-          sha256sum "mju-dataset-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}" \
-            > "checksums-${{ matrix.goos }}-${{ matrix.goarch }}.txt"
-
       - name: Verify endpoint is not in binary
         # Confirm the raw endpoint URL does not appear as plain text (SEC-003).
         # Since the endpoint is stored base64-encoded, strings(1) should not find it.
@@ -84,36 +98,102 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: mju-dataset-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: dist/*
-          if-no-files-found: error
-          retention-days: 3
+      - name: Upload to release server
+        env:
+          CLI_RELEASE_PUBLISH_TOKEN: ${{ secrets.CLI_RELEASE_PUBLISH_TOKEN }}
+        run: |
+          test -n "$CLI_RELEASE_PUBLISH_TOKEN"
+          test -n "$API_BASE"
 
-  release:
-    name: Create GitHub Release
+          BINARY="dist/mju-dataset-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}"
+          FILE_NAME="mju-dataset-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}"
+          OS_BUILD_TYPE="${{ matrix.os_build_type }}"
+
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="0.0.0-dev-${GITHUB_SHA::8}"
+          fi
+
+          SHA256=$(sha256sum "$BINARY" | awk '{print $1}')
+          FILE_SIZE=$(stat -c%s "$BINARY")
+          RELEASE_NOTES="Build: ${GITHUB_SHA::8} ($(date -u +%Y-%m-%d))"
+
+          # For dev versions, delete any existing entry first (allows re-upload on every push)
+          if [[ "$VERSION" == 0.0.0-dev-* ]]; then
+            curl -s -X DELETE \
+              -H "Authorization: Bearer $CLI_RELEASE_PUBLISH_TOKEN" \
+              "${API_BASE}/admin/cli-releases/${OS_BUILD_TYPE}/${VERSION}" || true
+          fi
+
+          echo "Uploading ${FILE_NAME} as ${OS_BUILD_TYPE} v${VERSION}..."
+          HTTP_STATUS=$(curl -s -o /tmp/chunk_resp.json -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer $CLI_RELEASE_PUBLISH_TOKEN" \
+            -F "os_build_type=${OS_BUILD_TYPE}" \
+            -F "version=${VERSION}" \
+            -F "commit_sha=${GITHUB_SHA}" \
+            -F "sha256=${SHA256}" \
+            -F "file_size=${FILE_SIZE}" \
+            -F "file_name=${FILE_NAME}" \
+            -F "chunk_index=0" \
+            -F "total_chunks=1" \
+            -F "release_notes=${RELEASE_NOTES}" \
+            -F "chunk=@${BINARY}" \
+            "${API_BASE}/admin/cli-releases/chunks")
+
+          echo "Chunk upload HTTP ${HTTP_STATUS}: $(cat /tmp/chunk_resp.json)"
+          if [[ "$HTTP_STATUS" != "200" && "$HTTP_STATUS" != "201" ]]; then
+            echo "::error::Chunk upload failed (HTTP ${HTTP_STATUS})"
+            exit 1
+          fi
+
+          echo "Completing upload..."
+          HTTP_STATUS=$(curl -s -o /tmp/complete_resp.json -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer $CLI_RELEASE_PUBLISH_TOKEN" \
+            -F "os_build_type=${OS_BUILD_TYPE}" \
+            -F "version=${VERSION}" \
+            "${API_BASE}/admin/cli-releases/complete")
+
+          echo "Complete HTTP ${HTTP_STATUS}: $(cat /tmp/complete_resp.json)"
+          if [[ "$HTTP_STATUS" != "200" && "$HTTP_STATUS" != "201" ]]; then
+            echo "::error::Upload complete failed (HTTP ${HTTP_STATUS})"
+            exit 1
+          fi
+
+          echo "Successfully uploaded ${OS_BUILD_TYPE} v${VERSION}"
+
+  summary:
+    name: Show install commands
     needs: build
     runs-on: ubuntu-latest
-    # Only create a release on version tags pushed to main.
-    if: startsWith(github.ref, 'refs/tags/v')
-    permissions:
-      contents: write
-
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          merge-multiple: true
-
-      - name: Merge checksums
+      - name: Print install commands
         run: |
-          cd artifacts
-          cat checksums-*.txt > checksums.txt
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="0.0.0-dev-${GITHUB_SHA::8}"
+          fi
 
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            artifacts/mju-dataset-*
-            artifacts/checksums.txt
-          generate_release_notes: true
+          SCRIPT_BASE="https://raw.githubusercontent.com/mjudcd-ct-r-d-labeling/labeling_download_cli/main/scripts"
+
+          {
+            echo "## mju-dataset v${VERSION} — Install Commands"
+            echo ""
+            echo "### Linux / macOS"
+            echo '```sh'
+            echo "curl -fsSL ${SCRIPT_BASE}/install.sh | sh"
+            echo '```'
+            echo ""
+            echo "### Windows (PowerShell)"
+            echo '```powershell'
+            echo "irm ${SCRIPT_BASE}/install.ps1 | iex"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo ""
+          echo "=== mju-dataset v${VERSION} build completed ==="
+          echo "Linux/macOS : curl -fsSL ${SCRIPT_BASE}/install.sh | sh"
+          echo "Windows     : irm ${SCRIPT_BASE}/install.ps1 | iex"
