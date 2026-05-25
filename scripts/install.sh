@@ -8,6 +8,7 @@
 set -e
 
 API_BASE="https://mjudcd-grac-api.newlearn.ai.kr"
+GH_REPO="mjudcd-ct-r-d-labeling/labeling_download_cli"
 BINARY="mju-dataset"
 INSTALL_DIR="/usr/local/bin"
 
@@ -34,21 +35,37 @@ esac
 
 OS_BUILD_TYPE="${OS}-${ARCH}"
 
-# ── Fetch latest version info ─────────────────────────────────────────────────
+# ── Fetch latest version from Git tags ───────────────────────────────────────
 echo "Fetching latest release for ${OS_BUILD_TYPE}..."
-LATEST_JSON=$(curl -fsSL \
-  "${API_BASE}/cli-releases/latest?os_build_type=${OS_BUILD_TYPE}&current_version=0.0.0")
+VERSION=$(curl -fsSL "https://api.github.com/repos/${GH_REPO}/tags?per_page=1" \
+  -H "Accept: application/vnd.github+json" \
+  | grep -o '"name":"[^"]*"' | head -1 | sed 's/"name":"//;s/"$//')
 
-VERSION=$(printf '%s' "$LATEST_JSON" | grep -o '"version":"[^"]*"' \
-  | sed 's/"version":"//;s/"$//')
-DOWNLOAD_URL=$(printf '%s' "$LATEST_JSON" | grep -o '"download_url":"[^"]*"' \
+if [ -z "$VERSION" ]; then
+  echo "Failed to determine latest version from GitHub tags."
+  exit 1
+fi
+
+# ── Fetch download URL from release server ────────────────────────────────────
+DL_JSON=$(curl -s -w "\n%{http_code}" \
+  "${API_BASE}/cli-releases/download/${OS_BUILD_TYPE}/${VERSION}")
+HTTP_STATUS=$(printf '%s' "$DL_JSON" | tail -1)
+DL_BODY=$(printf '%s' "$DL_JSON" | head -n -1)
+
+if [ "$HTTP_STATUS" != "200" ]; then
+  echo "Release ${VERSION} not found on server (HTTP ${HTTP_STATUS})."
+  echo "Response: ${DL_BODY}"
+  exit 1
+fi
+
+DOWNLOAD_URL=$(printf '%s' "$DL_BODY" | grep -o '"download_url":"[^"]*"' \
   | sed 's/"download_url":"//;s/"$//')
-SHA256=$(printf '%s' "$LATEST_JSON" | grep -o '"sha256":"[^"]*"' \
+SHA256=$(printf '%s' "$DL_BODY" | grep -o '"sha256":"[^"]*"' \
   | sed 's/"sha256":"//;s/"$//')
 
-if [ -z "$VERSION" ] || [ -z "$DOWNLOAD_URL" ]; then
-  echo "Failed to fetch latest release information."
-  echo "Response: $LATEST_JSON"
+if [ -z "$DOWNLOAD_URL" ]; then
+  echo "Failed to parse download URL from server response."
+  echo "Response: ${DL_BODY}"
   exit 1
 fi
 

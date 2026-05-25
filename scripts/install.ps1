@@ -9,6 +9,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $ApiBase     = "https://mjudcd-grac-api.newlearn.ai.kr"
+$GhRepo      = "mjudcd-ct-r-d-labeling/labeling_download_cli"
 $Binary      = "mju-dataset"
 $OsBuildType = "windows-amd64"
 
@@ -18,17 +19,27 @@ if (-not (Test-Path $InstallDir)) {
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 }
 
-# ── Fetch latest version info ─────────────────────────────────────────────────
+# ── Fetch latest version from Git tags ───────────────────────────────────────────────
 Write-Host "Fetching latest release for ${OsBuildType}..."
-$LatestUrl = "${ApiBase}/cli-releases/latest?os_build_type=${OsBuildType}&current_version=0.0.0"
-$Latest    = Invoke-RestMethod -Uri $LatestUrl -Headers @{ 'User-Agent' = 'mju-dataset-installer' }
+$TagsUrl = "https://api.github.com/repos/$GhRepo/tags?per_page=1"
+$Tags    = Invoke-RestMethod -Uri $TagsUrl `
+    -Headers @{ 'Accept' = 'application/vnd.github+json'; 'User-Agent' = 'mju-dataset-installer' }
+$Version = $Tags[0].name
+if (-not $Version) {
+    Write-Error "Failed to determine latest version from GitHub tags."
+    exit 1
+}
 
-$Version     = $Latest.version
-$DownloadUrl = $Latest.download_url
-$Sha256      = $Latest.sha256
+# ── Fetch download URL from release server ────────────────────────────────────────────
+$DlUrl  = "${ApiBase}/cli-releases/download/${OsBuildType}/${Version}"
+$DlInfo = Invoke-RestMethod -Uri $DlUrl `
+    -Headers @{ 'User-Agent' = 'mju-dataset-installer' }
 
-if (-not $Version -or -not $DownloadUrl) {
-    Write-Error "Failed to fetch latest release information."
+$DownloadUrl = $DlInfo.download_url
+$Sha256      = $DlInfo.sha256
+
+if (-not $DownloadUrl) {
+    Write-Error "Failed to parse download URL for ${OsBuildType} v${Version}."
     exit 1
 }
 
