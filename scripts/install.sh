@@ -56,7 +56,7 @@ fi
 DL_JSON=$(curl -s -w "\n%{http_code}" \
   "${API_BASE}/cli-releases/download/${OS_BUILD_TYPE}/${VERSION}")
 HTTP_STATUS=$(printf '%s' "$DL_JSON" | tail -1)
-DL_BODY=$(printf '%s' "$DL_JSON" | head -n -1)
+DL_BODY=$(printf '%s' "$DL_JSON" | sed '$d')
 
 if [ "$HTTP_STATUS" != "200" ]; then
   echo "Release ${VERSION} not found on server (HTTP ${HTTP_STATUS})."
