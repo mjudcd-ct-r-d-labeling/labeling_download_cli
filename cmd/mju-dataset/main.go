@@ -43,7 +43,7 @@ func main() {
 	}
 
 	// Guard: binary built without endpoint injection is unusable.
-	if build.Endpoint == "" {
+	if build.Endpoint() == "" {
 		fmt.Fprintln(os.Stderr, "This binary was not built with a server endpoint.")
 		fmt.Fprintln(os.Stderr, "Please use an official release from the project page.")
 		os.Exit(1)

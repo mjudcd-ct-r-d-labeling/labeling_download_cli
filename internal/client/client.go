@@ -55,7 +55,7 @@ func (c *Client) PostJSON(ctx context.Context, path string, body any, out any) e
 	if err != nil {
 		return fmt.Errorf("request encoding error")
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, build.Endpoint+path, bytes.NewReader(data))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, build.Endpoint()+path, bytes.NewReader(data))
 	if err != nil {
 		return safeNetErr(err)
 	}
@@ -83,7 +83,7 @@ func (c *Client) PostJSON(ctx context.Context, path string, body any, out any) e
 
 // GetJSON GETs path and decodes the JSON response into out.
 func (c *Client) GetJSON(ctx context.Context, path string, out any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, build.Endpoint+path, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, build.Endpoint()+path, nil)
 	if err != nil {
 		return safeNetErr(err)
 	}
@@ -109,7 +109,7 @@ func (c *Client) GetJSON(ctx context.Context, path string, out any) error {
 // When partOffset > 0, a Range header is set to attempt byte-range resume.
 // The caller is responsible for closing the returned response body.
 func (c *Client) GetStream(ctx context.Context, path string, partOffset int64) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, build.Endpoint+path, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, build.Endpoint()+path, nil)
 	if err != nil {
 		return nil, safeNetErr(err)
 	}
@@ -140,7 +140,7 @@ func (c *Client) GetStream(ctx context.Context, path string, partOffset int64) (
 
 // GetBytes fetches path without auth and returns the raw body.
 func (c *Client) GetBytes(ctx context.Context, path string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, build.Endpoint+path, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, build.Endpoint()+path, nil)
 	if err != nil {
 		return nil, safeNetErr(err)
 	}

@@ -5,6 +5,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+env:
+  # Use Node.js 24 for actions before the forced migration on 2026-06-02.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
@@ -44,7 +48,8 @@ jobs:
         # DOWNLOADER_API_ENDPOINT must be set as a repository secret.
         # test -n ensures the build fails immediately when the secret is absent
         # rather than producing a binary with an empty endpoint.
-        # The secret value is never echoed (SEC-003).
+        # The endpoint is base64-encoded before injection so it does not appear
+        # as a plain ASCII string in the compiled binary (SEC-003).
         env:
           DOWNLOADER_API_ENDPOINT: ${{ secrets.DOWNLOADER_API_ENDPOINT }}
           GOOS: ${{ matrix.goos }}
@@ -57,12 +62,13 @@ jobs:
           COMMIT="${GITHUB_SHA::8}"
           BUILD_DATE="$(date -u +%Y-%m-%d)"
           MODULE="github.com/mjudcd-ct-r-d-labeling/labeling_download_cli"
+          ENDPOINT_B64="$(printf '%s' "$DOWNLOADER_API_ENDPOINT" | base64 -w 0)"
 
           mkdir -p dist
           go build \
             -trimpath \
             -ldflags "-s -w \
-              -X '${MODULE}/internal/build.Endpoint=${DOWNLOADER_API_ENDPOINT}' \
+              -X '${MODULE}/internal/build.endpointB64=${ENDPOINT_B64}' \
               -X '${MODULE}/internal/version.Version=${VERSION}' \
               -X '${MODULE}/internal/version.Commit=${COMMIT}' \
               -X '${MODULE}/internal/version.BuildDate=${BUILD_DATE}'" \
@@ -76,14 +82,15 @@ jobs:
             > "checksums-${{ matrix.goos }}-${{ matrix.goarch }}.txt"
 
       - name: Verify endpoint is not in binary
-        # Lightweight guard: confirm the raw endpoint string does not appear
-        # in the compiled binary as plain text (SEC-003).
+        # Confirm the raw endpoint URL does not appear as plain text (SEC-003).
+        # Since the endpoint is stored base64-encoded, strings(1) should not find it.
         env:
           DOWNLOADER_API_ENDPOINT: ${{ secrets.DOWNLOADER_API_ENDPOINT }}
         run: |
           BINARY="dist/mju-dataset-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}"
           if strings "$BINARY" | grep -qF "$DOWNLOADER_API_ENDPOINT" 2>/dev/null; then
-            echo "::warning::Endpoint may be visible as a plain string in the binary."
+            echo "::error::Endpoint is visible as plain text in the binary. Build failed (SEC-003)."
+            exit 1
           fi
 
       - uses: actions/upload-artifact@v4
@@ -91,6 +98,7 @@ jobs:
           name: mju-dataset-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/*
           if-no-files-found: error
+          retention-days: 3
 
   release:
     name: Create GitHub Release
