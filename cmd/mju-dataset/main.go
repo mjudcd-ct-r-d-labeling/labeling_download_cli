@@ -5,7 +5,7 @@
 //	mju-dataset [--version | --update | --uninstall]
 //
 // The program prompts interactively for credentials and a local directory,
-// then downloads the full dataset from the labeling server.
+// then downloads the selected dataset from the labeling server.
 //
 // Security note: --base-url / --server / --endpoint options are intentionally
 // absent.  The server address is injected at build time and never exposed to
@@ -27,8 +27,10 @@ import (
 	"github.com/mjudcd-ct-r-d-labeling/labeling_download_cli/internal/build"
 	"github.com/mjudcd-ct-r-d-labeling/labeling_download_cli/internal/client"
 	"github.com/mjudcd-ct-r-d-labeling/labeling_download_cli/internal/downloader"
+	"github.com/mjudcd-ct-r-d-labeling/labeling_download_cli/internal/listinput"
 	"github.com/mjudcd-ct-r-d-labeling/labeling_download_cli/internal/manifest"
 	"github.com/mjudcd-ct-r-d-labeling/labeling_download_cli/internal/secureinput"
+	"github.com/mjudcd-ct-r-d-labeling/labeling_download_cli/internal/state"
 	"github.com/mjudcd-ct-r-d-labeling/labeling_download_cli/internal/uninstall"
 	"github.com/mjudcd-ct-r-d-labeling/labeling_download_cli/internal/updater"
 	"github.com/mjudcd-ct-r-d-labeling/labeling_download_cli/internal/version"
@@ -111,28 +113,88 @@ func run(ctx context.Context) error {
 	fmt.Println()
 	authed := c.WithToken(token)
 
-	// ── Step 2: Download directory ────────────────────────────────────────────
+	mode, err := promptMode(ctx)
+	if err != nil {
+		return err
+	}
+	var numbers []string
+	if mode == 2 {
+		value, readErr := secureinput.ReadLine("Classification number: ")
+		if readErr != nil {
+			return readErr
+		}
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return fmt.Errorf("classification number is required")
+		}
+		numbers = []string{value}
+	} else if mode == 3 {
+		directory, readErr := promptListDirectory(ctx)
+		if readErr != nil {
+			return readErr
+		}
+		var fileCount int
+		numbers, fileCount, err = listinput.LoadDirectory(directory)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Read %d classification numbers from %d list files.\n", len(numbers), fileCount)
+	}
+	fmt.Println()
+
+	// ── Download directory ────────────────────────────────────────────────────
 	downloadRoot, err := promptAbsPath(ctx)
 	if err != nil {
 		return err
 	}
 	fmt.Println()
 
-	// ── Step 3: Fetch download plan ───────────────────────────────────────────
+	// ── Fetch download plan ───────────────────────────────────────────────────
 	fmt.Print("Fetching file list from server... ")
-	entries, err := manifest.Build(ctx, authed, downloadRoot)
+	var entries []manifest.FileEntry
+	var unavailable []string
+	if mode == 1 {
+		entries, err = manifest.Build(ctx, authed, downloadRoot)
+	} else {
+		var selection *manifest.Selection
+		selection, err = manifest.BuildSelected(ctx, authed, downloadRoot, numbers)
+		if err == nil {
+			entries, unavailable = selection.Entries, selection.Unavailable
+		}
+	}
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return err
 		}
 		fmt.Println()
+		if mode != 1 {
+			return err
+		}
 		return fmt.Errorf("Network error. Please try again.")
 	}
 	fmt.Println("done.")
 	fmt.Println()
+	if len(unavailable) > 0 {
+		fmt.Printf("Unavailable: %d classification numbers or sessions.\n", len(unavailable))
+		for i, reason := range unavailable {
+			if i >= 5 {
+				fmt.Printf("  ... and %d more\n", len(unavailable)-5)
+				break
+			}
+			fmt.Println("  -", reason)
+		}
+		if err := writeUnavailableReport(downloadRoot, unavailable); err != nil {
+			fmt.Println("Warning: could not save unavailable report.")
+		} else {
+			fmt.Println("Full report: " + filepath.Join(downloadRoot, state.DirName, "unavailable.txt"))
+		}
+		fmt.Println()
+	} else if mode != 1 {
+		_ = os.Remove(filepath.Join(downloadRoot, state.DirName, "unavailable.txt"))
+	}
 
 	if len(entries) == 0 {
-		fmt.Println("No downloadable files are available on the server.")
+		fmt.Println("No downloadable files are available for this selection.")
 		return nil
 	}
 
@@ -151,7 +213,11 @@ func run(ctx context.Context) error {
 	}
 
 	// ── Step 5: Confirm and start ─────────────────────────────────────────────
-	fmt.Printf("Ready to download %d games / %d files.\n", gameCount, fileCount)
+	if mode == 1 {
+		fmt.Printf("Ready to download %d games / %d files.\n", gameCount, fileCount)
+	} else {
+		fmt.Printf("Ready to download %d games / %d sessions / %d files.\n", gameCount, manifest.UniqueSessions(entries), fileCount)
+	}
 	fmt.Print("Press Enter to start.")
 	if _, readErr := secureinput.ReadLine(""); readErr != nil && !errors.Is(readErr, context.Canceled) {
 		return readErr
@@ -163,6 +229,9 @@ func run(ctx context.Context) error {
 
 	// ── Step 7: Main download loop ────────────────────────────────────────────
 	sum := downloader.Run(ctx, authed, entries, fresh, downloadRoot)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	// ── Step 8: Summary ───────────────────────────────────────────────────────
 	fmt.Println()
@@ -177,6 +246,62 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("Completed with errors.")
 	}
 	return nil
+}
+
+func promptMode(ctx context.Context) (int, error) {
+	fmt.Println("[1] Download all data (existing export)")
+	fmt.Println("[2] Download all sessions for one classification number")
+	fmt.Println("[3] Download all sessions from list files in a directory")
+	for {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		choice, err := secureinput.ReadLine("Select mode (1/2/3): ")
+		if err != nil {
+			return 0, err
+		}
+		switch strings.TrimSpace(choice) {
+		case "1":
+			return 1, nil
+		case "2":
+			return 2, nil
+		case "3":
+			return 3, nil
+		default:
+			fmt.Println("Please enter 1, 2, or 3.")
+		}
+	}
+}
+
+func promptListDirectory(ctx context.Context) (string, error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		value, err := secureinput.ReadLine("List files directory (absolute path): ")
+		if err != nil {
+			return "", err
+		}
+		value = strings.TrimSpace(value)
+		if !filepath.IsAbs(value) {
+			fmt.Println("Please enter an absolute directory path.")
+			continue
+		}
+		info, err := os.Stat(value)
+		if err != nil || !info.IsDir() {
+			fmt.Println("List directory does not exist.")
+			continue
+		}
+		return filepath.Clean(value), nil
+	}
+}
+
+func writeUnavailableReport(root string, lines []string) error {
+	directory := filepath.Join(root, state.DirName)
+	if err := os.MkdirAll(directory, 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(directory, "unavailable.txt"), []byte(strings.Join(lines, "\n")+"\n"), 0644)
 }
 
 // promptAbsPath prompts for a download directory, enforcing absolute paths,

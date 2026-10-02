@@ -4,6 +4,8 @@ package downloader
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -11,9 +13,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
-
-	"github.com/schollz/progressbar/v3"
 
 	"github.com/mjudcd-ct-r-d-labeling/labeling_download_cli/internal/client"
 	"github.com/mjudcd-ct-r-d-labeling/labeling_download_cli/internal/manifest"
@@ -80,23 +81,29 @@ func Run(ctx context.Context, c *client.Client, entries []manifest.FileEntry, fr
 	}
 
 	var sum Summary
-	total := len(entries)
 	newFailed := make([]string, 0)
+	progress := newProgressDisplay(len(entries))
+	defer func() { progress.close(ctx.Err() != nil) }()
 
-	for i, entry := range entries {
+	for _, entry := range entries {
 		if ctx.Err() != nil {
 			break
 		}
 
-		relPath := filepath.Join(entry.CN, entry.Filename)
-		label := fmt.Sprintf("[%d/%d] %s", i+1, total, entry.Filename)
+		relPath, err := filepath.Rel(downloadRoot, resume.FinalPath(entry))
+		if err != nil {
+			newFailed = append(newFailed, entry.Filename)
+			progress.advance("fail")
+			continue
+		}
+		progress.begin(relPath)
 
 		fileStatus, partSize := resume.Check(entry)
 
 		// Skip already verified files (resume mode).
 		if fileStatus == resume.StatusComplete && !fresh && completedSet[relPath] {
-			fmt.Printf("  SKIP   %s\n", entry.Filename)
 			sum.Skipped++
+			progress.advance("skip")
 			continue
 		}
 		// Re-check corrupt files even without fresh flag.
@@ -104,6 +111,10 @@ func Run(ctx context.Context, c *client.Client, entries []manifest.FileEntry, fr
 			_ = resume.RemoveCorrupt(entry)
 			partSize = 0
 			fileStatus = resume.StatusMissing
+		}
+		if fileStatus == resume.StatusPartial && entry.Size > 0 && partSize >= entry.Size {
+			_ = os.Remove(resume.PartPath(entry))
+			partSize = 0
 		}
 
 		if fresh {
@@ -115,25 +126,26 @@ func Run(ctx context.Context, c *client.Client, entries []manifest.FileEntry, fr
 
 		// Ensure local CN sub-directory exists.
 		if err := os.MkdirAll(entry.LocalDir, 0755); err != nil {
-			fmt.Printf("  FAIL   %s (cannot create directory)\n", entry.Filename)
 			newFailed = append(newFailed, relPath)
 			state.AppendLog(downloadRoot, time.Now().UTC(), "FAIL", entry.Filename, "directory creation error")
+			progress.advance("fail")
 			continue
 		}
 
-		err := downloadWithRetry(ctx, c, entry, partSize, label)
+		err = downloadWithRetry(ctx, c, entry, partSize, progress)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				// Preserve state on interrupt so the user can resume.
 				break
 			}
-			fmt.Printf("\n  FAIL   %s\n", entry.Filename)
 			newFailed = append(newFailed, relPath)
 			state.AppendLog(downloadRoot, time.Now().UTC(), "FAIL", entry.Filename, "download failed after retries")
+			progress.advance("fail")
 		} else {
 			sum.Success++
 			completedSet[relPath] = true
 			state.AppendLog(downloadRoot, time.Now().UTC(), "SUCCESS", entry.Filename, "")
+			progress.advance("success")
 		}
 	}
 
@@ -151,7 +163,7 @@ func Run(ctx context.Context, c *client.Client, entries []manifest.FileEntry, fr
 }
 
 // downloadWithRetry retries up to maxRetries times with exponential backoff.
-func downloadWithRetry(ctx context.Context, c *client.Client, entry manifest.FileEntry, partSize int64, label string) error {
+func downloadWithRetry(ctx context.Context, c *client.Client, entry manifest.FileEntry, partSize int64, progress *progressDisplay) error {
 	var lastErr error
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if ctx.Err() != nil {
@@ -159,18 +171,21 @@ func downloadWithRetry(ctx context.Context, c *client.Client, entry manifest.Fil
 		}
 		if attempt > 0 {
 			wait := time.Duration(math.Pow(2, float64(attempt))) * time.Second
-			fmt.Printf("  Retry %d/%d in %v...\n", attempt, maxRetries-1, wait)
+			progress.retry(attempt, maxRetries-1)
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
 			case <-time.After(wait):
 			}
 		}
-		lastErr = downloadFile(ctx, c, entry, partSize, label)
+		lastErr = downloadFile(ctx, c, entry, partSize, progress)
 		if lastErr == nil {
 			return nil
 		}
 		if errors.Is(lastErr, context.Canceled) {
+			return lastErr
+		}
+		if errors.Is(lastErr, client.ErrVersionChanged) {
 			return lastErr
 		}
 		// Reset part offset so the next attempt retries from scratch when
@@ -181,12 +196,18 @@ func downloadWithRetry(ctx context.Context, c *client.Client, entry manifest.Fil
 }
 
 // downloadFile performs a single streaming download attempt.
-func downloadFile(ctx context.Context, c *client.Client, entry manifest.FileEntry, offset int64, label string) error {
-	resp, err := c.GetStream(ctx, entry.DownloadPath, offset)
+func downloadFile(ctx context.Context, c *client.Client, entry manifest.FileEntry, offset int64, progress *progressDisplay) error {
+	resp, err := c.GetStream(ctx, entry.DownloadPath, offset, entry.ETag)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+	if offset > 0 && resp.StatusCode == http.StatusPartialContent {
+		expectedPrefix := fmt.Sprintf("bytes %d-", offset)
+		if !strings.HasPrefix(resp.Header.Get("Content-Range"), expectedPrefix) || (entry.ETag != "" && resp.Header.Get("ETag") != entry.ETag) {
+			return fmt.Errorf("partial response does not match requested file")
+		}
+	}
 
 	// Server returned 200 (not 206) despite our Range request → reset offset.
 	if resp.StatusCode == http.StatusOK && offset > 0 {
@@ -212,25 +233,9 @@ func downloadFile(ctx context.Context, c *client.Client, entry manifest.FileEntr
 		totalSize = offset + resp.ContentLength
 	}
 
-	bar := progressbar.NewOptions64(
-		totalSize,
-		progressbar.OptionSetDescription(label),
-		progressbar.OptionShowBytes(true),
-		progressbar.OptionSetWidth(25),
-		progressbar.OptionShowCount(),
-		progressbar.OptionSetPredictTime(true),
-		progressbar.OptionOnCompletion(func() { fmt.Println() }),
-		progressbar.OptionSetTheme(progressbar.Theme{
-			Saucer:        "=",
-			SaucerHead:    ">",
-			SaucerPadding: " ",
-			BarStart:      "[",
-			BarEnd:        "]",
-		}),
-	)
-	if offset > 0 {
-		_ = bar.Add64(offset)
-	}
+	progress.note = "Downloading"
+	progress.update(offset, totalSize)
+	written := offset
 
 	buf := make([]byte, readBufSize)
 	for {
@@ -241,7 +246,8 @@ func downloadFile(ctx context.Context, c *client.Client, entry manifest.FileEntr
 		n, readErr := resp.Body.Read(buf)
 		if n > 0 {
 			wn, werr := f.Write(buf[:n])
-			_ = bar.Add(wn)
+			written += int64(wn)
+			progress.update(written, totalSize)
 			if werr != nil {
 				_ = f.Close()
 				return fmt.Errorf("write error")
@@ -259,10 +265,39 @@ func downloadFile(ctx context.Context, c *client.Client, entry manifest.FileEntr
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("file close error")
 	}
+	if err := verifyDownloadedFile(entry, partPath); err != nil {
+		_ = os.Remove(partPath)
+		return err
+	}
 
 	// Atomic rename: .part → final filename (FR-RESUME-002).
 	if err := os.Rename(partPath, resume.FinalPath(entry)); err != nil {
 		return fmt.Errorf("rename error")
+	}
+	return nil
+}
+
+func verifyDownloadedFile(entry manifest.FileEntry, path string) error {
+	if entry.Size <= 0 && entry.SHA256 == "" {
+		return nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("cannot verify downloaded file")
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || (entry.Size > 0 && info.Size() != entry.Size) {
+		return fmt.Errorf("downloaded file size mismatch")
+	}
+	if entry.SHA256 != "" {
+		h := sha256.New()
+		if _, err := io.Copy(h, f); err != nil {
+			return fmt.Errorf("cannot verify downloaded file")
+		}
+		if hex.EncodeToString(h.Sum(nil)) != entry.SHA256 {
+			return fmt.Errorf("downloaded file checksum mismatch")
+		}
 	}
 	return nil
 }

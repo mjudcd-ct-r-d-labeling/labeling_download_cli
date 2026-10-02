@@ -27,6 +27,9 @@ var ErrNotAuthorized = errors.New("Not authorized")
 // ErrNotFound is returned for HTTP 404 responses.
 var ErrNotFound = errors.New("file not found")
 
+var ErrVersionChanged = errors.New("file version changed; run again to refresh the file list")
+var ErrRangeInvalid = errors.New("partial download range is invalid")
+
 // Client wraps http.Client with Bearer auth and URL-safe error handling.
 type Client struct {
 	hc    *http.Client
@@ -108,7 +111,7 @@ func (c *Client) GetJSON(ctx context.Context, path string, out any) error {
 // GetStream opens a streaming GET for path.
 // When partOffset > 0, a Range header is set to attempt byte-range resume.
 // The caller is responsible for closing the returned response body.
-func (c *Client) GetStream(ctx context.Context, path string, partOffset int64) (*http.Response, error) {
+func (c *Client) GetStream(ctx context.Context, path string, partOffset int64, etag string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, build.Endpoint()+path, nil)
 	if err != nil {
 		return nil, safeNetErr(err)
@@ -116,6 +119,9 @@ func (c *Client) GetStream(ctx context.Context, path string, partOffset int64) (
 	c.attachAuth(req)
 	if partOffset > 0 {
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", partOffset))
+		if etag != "" {
+			req.Header.Set("If-Range", etag)
+		}
 	}
 
 	resp, err := c.hc.Do(req)
@@ -130,6 +136,12 @@ func (c *Client) GetStream(ctx context.Context, path string, partOffset int64) (
 	case http.StatusNotFound:
 		resp.Body.Close()
 		return nil, ErrNotFound
+	case http.StatusPreconditionFailed:
+		resp.Body.Close()
+		return nil, ErrVersionChanged
+	case http.StatusRequestedRangeNotSatisfiable:
+		resp.Body.Close()
+		return nil, ErrRangeInvalid
 	case http.StatusOK, http.StatusPartialContent:
 		return resp, nil
 	default:
