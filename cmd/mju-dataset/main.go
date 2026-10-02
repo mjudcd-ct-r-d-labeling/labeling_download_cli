@@ -2,7 +2,7 @@
 //
 // Usage:
 //
-//	mju-dataset [--version]
+//	mju-dataset [--version | --update]
 //
 // The program prompts interactively for credentials and a local directory,
 // then downloads the full dataset from the labeling server.
@@ -29,17 +29,36 @@ import (
 	"github.com/mjudcd-ct-r-d-labeling/labeling_download_cli/internal/downloader"
 	"github.com/mjudcd-ct-r-d-labeling/labeling_download_cli/internal/manifest"
 	"github.com/mjudcd-ct-r-d-labeling/labeling_download_cli/internal/secureinput"
+	"github.com/mjudcd-ct-r-d-labeling/labeling_download_cli/internal/updater"
 	"github.com/mjudcd-ct-r-d-labeling/labeling_download_cli/internal/version"
 )
 
 func main() {
 	showVersion := flag.Bool("version", false, "Print version information and exit")
+	update := flag.Bool("update", false, "Install the latest published CLI version")
 	// NOTE: --base-url / --server / --endpoint flags are intentionally omitted (SEC-001).
 	flag.Parse()
+	if flag.NArg() != 0 || (*showVersion && *update) {
+		fmt.Fprintln(os.Stderr, "Usage: mju-dataset [--version | --update]")
+		os.Exit(2)
+	}
 
 	if *showVersion {
 		version.Print()
 		os.Exit(0)
+	}
+	if *update {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		if err := updater.Run(ctx); err != nil {
+			if errors.Is(err, context.Canceled) {
+				fmt.Fprintln(os.Stderr, "Update interrupted.")
+				os.Exit(130)
+			}
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	// Guard: binary built without endpoint injection is unusable.

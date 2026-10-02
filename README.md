@@ -74,6 +74,7 @@ mju-dataset
 
 ```sh
 mju-dataset --version
+mju-dataset --update
 ```
 
 ### 1. 프로그램 실행
@@ -187,6 +188,30 @@ Done.  Success: <count>  Skipped: <count>  Failed: <count>
 - 선택한 다운로드 경로 아래에 실제 데이터 파일이 저장됩니다.
 - `data_explain.md` 파일이 함께 내려받아집니다.
 - 숨김 폴더 `.mju-dataset-download`가 생성되며, 여기에는 이어받기 상태와 로그가 저장됩니다.
+
+## 업데이트
+
+CLI를 종료한 상태에서 다음 명령을 실행합니다.
+
+```sh
+mju-dataset --update
+```
+
+데이터셋 로그인 없이 공개된 배포 태그에서 최신 버전을 확인하고, 현재 OS·CPU에 맞는 바이너리를 내려받습니다. 파일 크기와 SHA-256이 일치할 때만 실행 파일을 교체합니다. 현재 버전이 같거나 더 높으면 교체하지 않습니다. 다운로드한 데이터와 이어받기 상태는 유지됩니다.
+
+- macOS / Linux: 설치 경로의 쓰기 권한이 없으면 `sudo` 비밀번호를 요청합니다.
+- Windows: CLI가 종료된 뒤 PowerShell 업데이트 도우미가 실행 파일을 교체합니다. 다른 CLI 인스턴스는 먼저 종료하세요. 실패하면 설치 폴더의 `.mju-dataset-update-*.log`를 확인하세요.
+- 업데이트 후 `mju-dataset --version`으로 설치 버전을 확인합니다.
+- `--update`가 없는 이전 버전은 위 설치 명령을 한 번 다시 실행해야 합니다.
+- GitHub API 요청 제한이나 네트워크 오류가 발생하면 잠시 후 다시 실행합니다.
+
+## 코드 변경과 배포
+
+`main` 브랜치에 push하거나 `main`에서 GitHub Actions를 수동 실행하면 테스트, 5개 플랫폼 빌드, 배포 서버 업로드가 진행됩니다. 모든 플랫폼의 업로드가 성공한 뒤 버전 태그를 공개하므로 설치·업데이트 대상에 포함됩니다. 버전은 커밋 날짜와 Actions 실행 번호로 생성합니다.
+
+필요한 저장소 시크릿은 `DOWNLOADER_API_ENDPOINT`, `API_BASE`, `CLI_RELEASE_PUBLISH_TOKEN`입니다. 마지막 값은 서버의 `CLIENT_RELEASE_PUBLISH_TOKEN`과 일치해야 합니다. 부분 업로드나 실패한 실행은 최신 공개 태그를 갱신하지 않습니다. 실패한 업로드를 재실행할 때 이미 등록된 플랫폼 버전이 충돌하면 서버의 기존 릴리즈를 정리하거나 새 Actions 실행으로 새 버전을 배포해야 합니다.
+
+로컬 수정·커밋이나 다른 브랜치의 push만으로 배포되지 않습니다. 배포 완료 후에도 사용자는 `mju-dataset --update` 또는 설치 스크립트를 실행해야 합니다.
 
 ## 삭제 방법
 

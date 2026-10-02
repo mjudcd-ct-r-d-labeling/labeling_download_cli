@@ -10,30 +10,25 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   API_BASE: ${{ secrets.API_BASE }}
 
+concurrency:
+  group: cli-release-main
+  cancel-in-progress: false
+
 jobs:
   prepare:
-    name: Create version tag
+    name: Prepare release version
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     outputs:
       version: ${{ steps.tag.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Create and push version tag
+      - name: Prepare version
         id: tag
         run: |
-          VERSION="$(date -u +%Y.%m.%d).${{ github.run_number }}"
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          # Skip if tag already exists (e.g. on workflow re-run)
-          if git ls-remote --tags origin "refs/tags/${VERSION}" | grep -q "${VERSION}"; then
-            echo "Tag ${VERSION} already exists, skipping."
-          else
-            git tag "$VERSION"
-            git push origin "$VERSION"
-          fi
+          COMMIT_DATE="$(git show -s --format=%cs HEAD)"
+          VERSION="$(date -u -d "$COMMIT_DATE" +%Y.%m.%d).${{ github.run_number }}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Version: ${VERSION}"
 
@@ -71,7 +66,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.23.x"
+          go-version-file: go.mod
           cache: true
 
       - name: Test
@@ -177,10 +172,26 @@ jobs:
           echo "Successfully uploaded ${OS_BUILD_TYPE} v${VERSION}"
 
   summary:
-    name: Show install commands
+    name: Publish version tag and show install commands
     needs: [prepare, build]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Publish version tag after all uploads succeed
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          git fetch --tags origin
+          if git rev-parse "refs/tags/$RELEASE_VERSION" >/dev/null 2>&1; then
+            test "$(git rev-list -n 1 "$RELEASE_VERSION")" = "$GITHUB_SHA"
+          else
+            git tag "$RELEASE_VERSION" "$GITHUB_SHA"
+            git push origin "refs/tags/$RELEASE_VERSION"
+          fi
+
       - name: Print install commands
         env:
           SUMMARY_VERSION: ${{ needs.prepare.outputs.version }}
