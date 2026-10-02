@@ -86,35 +86,41 @@ jobs:
           BUILD_VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           test -n "$DOWNLOADER_API_ENDPOINT"
+          test -n "$API_BASE"
 
           VERSION="$BUILD_VERSION"
           COMMIT="${GITHUB_SHA::8}"
           BUILD_DATE="$(date -u +%Y-%m-%d)"
           MODULE="github.com/mjudcd-ct-r-d-labeling/labeling_download_cli"
           ENDPOINT_B64="$(printf '%s' "$DOWNLOADER_API_ENDPOINT" | base64 -w 0)"
+          RELEASE_ENDPOINT_B64="$(printf '%s' "$API_BASE" | base64 -w 0)"
 
           mkdir -p dist
           go build \
             -trimpath \
             -ldflags "-s -w \
               -X '${MODULE}/internal/build.endpointB64=${ENDPOINT_B64}' \
+              -X '${MODULE}/internal/build.releaseEndpointB64=${RELEASE_ENDPOINT_B64}' \
               -X '${MODULE}/internal/version.Version=${VERSION}' \
               -X '${MODULE}/internal/version.Commit=${COMMIT}' \
               -X '${MODULE}/internal/version.BuildDate=${BUILD_DATE}'" \
             -o "dist/mju-dataset-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}" \
             ./cmd/mju-dataset
 
-      - name: Verify endpoint is not in binary
-        # Confirm the raw endpoint URL does not appear as plain text (SEC-003).
-        # Since the endpoint is stored base64-encoded, strings(1) should not find it.
+      - name: Verify endpoints are not in binary
+        # Scan both raw API addresses directly in binary bytes (SEC-003).
+        # Avoid a strings | grep -q pipeline that can hide failures via SIGPIPE.
         env:
           DOWNLOADER_API_ENDPOINT: ${{ secrets.DOWNLOADER_API_ENDPOINT }}
         run: |
           BINARY="dist/mju-dataset-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}"
-          if strings "$BINARY" | grep -qF "$DOWNLOADER_API_ENDPOINT" 2>/dev/null; then
-            echo "::error::Endpoint is visible as plain text in the binary. Build failed (SEC-003)."
-            exit 1
-          fi
+          for ENDPOINT in "$DOWNLOADER_API_ENDPOINT" "$API_BASE"; do
+            test -n "$ENDPOINT"
+            if LC_ALL=C grep -aF -- "$ENDPOINT" "$BINARY" >/dev/null; then
+              echo "::error::Endpoint is visible as plain text in the binary. Build failed (SEC-003)."
+              exit 1
+            fi
+          done
 
       - name: Upload to release server
         env:
@@ -218,4 +224,3 @@ jobs:
           echo "=== mju-dataset v${VERSION} build completed ==="
           echo "Linux/macOS : curl -fsSL ${SCRIPT_BASE}/install.sh | sh"
           echo "Windows     : irm ${SCRIPT_BASE}/install.ps1 | iex"
-

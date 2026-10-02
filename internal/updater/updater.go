@@ -13,14 +13,15 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
+	"github.com/mjudcd-ct-r-d-labeling/labeling_download_cli/internal/build"
 	"github.com/mjudcd-ct-r-d-labeling/labeling_download_cli/internal/version"
 )
 
 const (
 	tagsURL       = "https://api.github.com/repos/mjudcd-ct-r-d-labeling/labeling_download_cli/tags"
-	releaseBase   = "https://mjudcd-grac-api.newlearn.ai.kr"
 	maxBinarySize = 256 << 20
 )
 
@@ -33,6 +34,10 @@ type release struct {
 
 // Run performs an explicit update, independently of dataset authentication.
 func Run(ctx context.Context) error {
+	releaseBase := strings.TrimRight(build.ReleaseEndpoint(), "/")
+	if releaseBase == "" {
+		return fmt.Errorf("this binary has no update endpoint; please use an official release")
+	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Minute)
 	defer cancel()
 	t := http.DefaultTransport.(*http.Transport).Clone()

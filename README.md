@@ -75,6 +75,7 @@ mju-dataset
 ```sh
 mju-dataset --version
 mju-dataset --update
+mju-dataset --uninstall
 ```
 
 ### 1. 프로그램 실행
@@ -211,6 +212,8 @@ mju-dataset --update
 
 필요한 저장소 시크릿은 `DOWNLOADER_API_ENDPOINT`, `API_BASE`, `CLI_RELEASE_PUBLISH_TOKEN`입니다. 마지막 값은 서버의 `CLIENT_RELEASE_PUBLISH_TOKEN`과 일치해야 합니다. 부분 업로드나 실패한 실행은 최신 공개 태그를 갱신하지 않습니다. 실패한 업로드를 재실행할 때 이미 등록된 플랫폼 버전이 충돌하면 서버의 기존 릴리즈를 정리하거나 새 Actions 실행으로 새 버전을 배포해야 합니다.
 
+데이터셋 API 주소와 업데이트용 배포 API 주소는 각각 빌드 시 Base64로 주입합니다. 빌드 후 두 주소가 바이너리에 평문으로 포함되지 않았는지 검사합니다.
+
 로컬 수정·커밋이나 다른 브랜치의 push만으로 배포되지 않습니다. 배포 완료 후에도 사용자는 `mju-dataset --update` 또는 설치 스크립트를 실행해야 합니다.
 
 ## 삭제 방법
@@ -218,6 +221,16 @@ mju-dataset --update
 삭제는 `CLI만 삭제`하는 경우와 `다운로드한 데이터까지 삭제`하는 경우를 구분해서 진행하면 됩니다.
 
 ### CLI만 삭제
+
+다음 명령으로 현재 실행한 CLI를 삭제합니다. 인증 정보는 필요하지 않으며, 다운로드한 데이터와 이어받기 상태는 유지됩니다.
+
+```sh
+mju-dataset --uninstall
+```
+
+macOS / Linux에서는 필요하면 `sudo` 비밀번호를 요청합니다. Windows에서는 CLI 종료 후 PowerShell 도우미가 실행 파일을 삭제하고, 기본 설치 경로의 사용자 PATH 항목을 정리합니다. 기본 설치 폴더는 비어 있을 때만 삭제합니다. 다른 CLI 인스턴스는 먼저 종료하세요. 실패하면 명령에서 안내한 임시 로그를 확인하세요. PATH 변경은 새 터미널에서 반영됩니다.
+
+`--uninstall`이 없는 이전 버전이나 직접 삭제가 필요한 경우에는 아래 명령을 사용합니다.
 
 macOS / Linux:
 
