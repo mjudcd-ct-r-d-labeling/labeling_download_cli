@@ -174,6 +174,8 @@ Done 10  Skipped 2  Failed 0  |  Elapsed 2m15s
 - `Done` / `Skipped` / `Failed`: 완료·건너뜀·실패 건수
 - `Elapsed`: 경과 시간
 
+파일 수신이 끝나면 `Verifying file` 상태를 표시한 뒤, 검증을 통과한 파일을 완료로 집계합니다.
+
 출력을 파일로 리다이렉트한 환경에서는 간헐적인 진행 요약을 기록합니다.
 
 ## 목록 파일 작성
@@ -301,6 +303,15 @@ mju-dataset --update
 데이터셋 인증 없이 최신 공개 버전을 확인하고, 현재 운영체제와 아키텍처에 맞는 실행 파일을 내려받습니다. 파일 크기와 SHA-256 검증을 통과한 경우에만 실행 파일을 교체합니다. 현재 버전이 같거나 더 높으면 교체하지 않습니다.
 
 다운로드한 데이터와 이어받기 상태는 유지됩니다. 업데이트 후 `mju-dataset --version`으로 버전을 확인합니다.
+
+업데이트 파일을 받는 동안 진행률, 전송량, 경과 시간을 표시합니다.
+
+```text
+Update [########------------]  40%  8.0 MiB / 20.0 MiB
+Status Downloading  |  Elapsed 3s
+```
+
+다운로드 후에는 `Verifying size and SHA-256` → `Verified` → `Installing verified update...` 순서로 상태를 안내합니다. `Verified`는 내려받은 파일의 검증 완료를 뜻하며, 설치 완료 여부는 이후 출력되는 메시지로 확인합니다. 검증 또는 저장에 실패하면 `Failed`, 다운로드가 중단되면 `Interrupted`를 표시합니다. 출력을 파일로 리다이렉트하면 화면 갱신 대신 주기적인 진행 요약을 기록합니다.
 
 macOS / Linux에서는 설치 경로에 쓰기 권한이 없으면 `sudo` 비밀번호를 요청합니다. Windows에서는 CLI 종료 후 PowerShell 도우미가 실행 파일을 교체하므로 다른 CLI 인스턴스도 먼저 종료합니다.
 

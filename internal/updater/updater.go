@@ -86,6 +86,7 @@ func Run(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	fmt.Println("Installing verified update...")
 	return install(ctx, source, target, latest)
 }
 
@@ -163,14 +164,18 @@ func download(ctx context.Context, c *http.Client, info release) (path string, e
 			os.Remove(path)
 		}
 	}()
+	progress := newDownloadProgress(info.Size)
+	defer func() { progress.finish(err) }()
 	hash := sha256.New()
-	n, err := io.Copy(io.MultiWriter(f, hash), io.LimitReader(resp.Body, info.Size+1))
+	n, err := io.Copy(io.MultiWriter(f, hash, progress), io.LimitReader(resp.Body, info.Size+1))
 	if err != nil {
 		if ctx.Err() != nil {
 			return path, ctx.Err()
 		}
 		return path, fmt.Errorf("update download failed")
 	}
+	progress.phase = "Verifying size and SHA-256"
+	progress.draw(true)
 	if n != info.Size || !equalHash(hash.Sum(nil), expected) {
 		return path, fmt.Errorf("update integrity verification failed; installed CLI was preserved")
 	}

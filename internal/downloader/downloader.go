@@ -265,6 +265,8 @@ func downloadFile(ctx context.Context, c *client.Client, entry manifest.FileEntr
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("file close error")
 	}
+	progress.note = "Verifying file"
+	progress.draw(true)
 	if err := verifyDownloadedFile(entry, partPath); err != nil {
 		_ = os.Remove(partPath)
 		return err
