@@ -129,16 +129,15 @@ func run(ctx context.Context) error {
 		}
 		numbers = []string{value}
 	} else if mode == 3 {
-		directory, readErr := promptListDirectory(ctx)
+		path, readErr := promptListFile(ctx)
 		if readErr != nil {
 			return readErr
 		}
-		var fileCount int
-		numbers, fileCount, err = listinput.LoadDirectory(directory)
+		numbers, err = listinput.LoadFile(path)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Read %d classification numbers from %d list files.\n", len(numbers), fileCount)
+		fmt.Printf("Read %d classification numbers from list file %q.\n", len(numbers), path)
 	}
 	fmt.Println()
 
@@ -251,7 +250,7 @@ func run(ctx context.Context) error {
 func promptMode(ctx context.Context) (int, error) {
 	fmt.Println("[1] Download all data (existing export)")
 	fmt.Println("[2] Download all sessions for one classification number")
-	fmt.Println("[3] Download all sessions from list files in a directory")
+	fmt.Println("[3] Download all sessions from a list file")
 	for {
 		if err := ctx.Err(); err != nil {
 			return 0, err
@@ -273,23 +272,27 @@ func promptMode(ctx context.Context) (int, error) {
 	}
 }
 
-func promptListDirectory(ctx context.Context) (string, error) {
+func promptListFile(ctx context.Context) (string, error) {
 	for {
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		value, err := secureinput.ReadLine("List files directory (absolute path): ")
+		value, err := secureinput.ReadLine("List file (absolute path, CSV/XLSX/JSON): ")
 		if err != nil {
 			return "", err
 		}
 		value = strings.TrimSpace(value)
 		if !filepath.IsAbs(value) {
-			fmt.Println("Please enter an absolute directory path.")
+			fmt.Println("Please enter an absolute file path including the file name and extension.")
 			continue
 		}
 		info, err := os.Stat(value)
-		if err != nil || !info.IsDir() {
-			fmt.Println("List directory does not exist.")
+		if err != nil {
+			fmt.Printf("Cannot access list file: %v\n", err)
+			continue
+		}
+		if !info.Mode().IsRegular() {
+			fmt.Println("Please select a list file, including its file name and extension.")
 			continue
 		}
 		return filepath.Clean(value), nil

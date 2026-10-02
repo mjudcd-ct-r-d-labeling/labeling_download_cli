@@ -1,4 +1,4 @@
-// Package listinput reads classification numbers from a directory of list files.
+// Package listinput reads classification numbers from a specified list file.
 package listinput
 
 import (
@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -16,58 +15,46 @@ import (
 
 const maxFileSize = 50 << 20
 
-// LoadDirectory reads supported files in the specified directory only. Each
-// number is returned once, in first-seen order across alphabetically sorted files.
-func LoadDirectory(dir string) ([]string, int, error) {
-	entries, err := os.ReadDir(dir)
+// LoadFile reads the specified CSV, XLSX, or JSON list file. Each number is
+// returned once, in first-seen order.
+func LoadFile(path string) ([]string, error) {
+	info, err := os.Stat(path)
 	if err != nil {
-		return nil, 0, fmt.Errorf("cannot read list directory: %w", err)
+		return nil, fmt.Errorf("cannot read list file %s: %w", path, err)
 	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("list path must point to a regular file: %s", path)
+	}
+	if info.Size() > maxFileSize {
+		return nil, fmt.Errorf("list file exceeds 50 MiB: %s", path)
+	}
+	var values []string
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".csv":
+		values, err = readCSV(path)
+	case ".xlsx":
+		values, err = readXLSX(path)
+	case ".json":
+		values, err = readJSON(path)
+	default:
+		return nil, fmt.Errorf("list file must be CSV, XLSX, or JSON: %s", path)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("invalid list file %s: %w", path, err)
+	}
 	seen := make(map[string]bool)
 	numbers := make([]string, 0)
-	fileCount := 0
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" && !seen[value] {
+			seen[value] = true
+			numbers = append(numbers, value)
 		}
-		ext := strings.ToLower(filepath.Ext(entry.Name()))
-		if ext != ".csv" && ext != ".xlsx" && ext != ".json" {
-			continue
-		}
-		path := filepath.Join(dir, entry.Name())
-		info, err := os.Stat(path)
-		if err != nil || !info.Mode().IsRegular() || info.Size() > maxFileSize {
-			return nil, 0, fmt.Errorf("invalid list file: %s", entry.Name())
-		}
-		var values []string
-		switch ext {
-		case ".csv":
-			values, err = readCSV(path)
-		case ".xlsx":
-			values, err = readXLSX(path)
-		case ".json":
-			values, err = readJSON(path)
-		}
-		if err != nil {
-			return nil, 0, fmt.Errorf("invalid list file %s: %w", entry.Name(), err)
-		}
-		fileCount++
-		for _, value := range values {
-			value = strings.TrimSpace(value)
-			if value != "" && !seen[value] {
-				seen[value] = true
-				numbers = append(numbers, value)
-			}
-		}
-	}
-	if fileCount == 0 {
-		return nil, 0, fmt.Errorf("no CSV, XLSX, or JSON list files found")
 	}
 	if len(numbers) == 0 {
-		return nil, fileCount, fmt.Errorf("list files contain no classification numbers")
+		return nil, fmt.Errorf("list file contains no classification numbers")
 	}
-	return numbers, fileCount, nil
+	return numbers, nil
 }
 
 func readCSV(path string) ([]string, error) {

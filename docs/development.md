@@ -6,7 +6,7 @@
 
 전체 다운로드는 `/exports/list`와 `/exports/file/{classification_number}/{file_type}`을 사용하며, 파일을 번호별 폴더에 저장합니다.
 
-기존 `User Key`·`Password`·`Token` 인증을 유지합니다. 번호 직접 입력과 목록 디렉터리 입력은 같은 API를 사용합니다.
+기존 `User Key`·`Password`·`Token` 인증을 유지합니다. 번호 직접 입력과 목록 파일 경로 입력은 같은 API를 사용합니다.
 
 ```http
 POST /exports/classifications/manifest
