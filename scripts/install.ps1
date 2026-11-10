@@ -3,7 +3,8 @@
 #
 # This script does NOT contain the labeling server address.
 # It fetches the latest release from the distribution API and downloads
-# the binary via a presigned URL.
+# the binary via a presigned URL. GitHub's REST API is only a fallback for
+# resolving the latest tag because unauthenticated API requests are rate-limited.
 #Requires -Version 5.1
 param(
     # A specific version can be passed as an argument:
@@ -27,12 +28,26 @@ if (-not (Test-Path $InstallDir)) {
 # ── Fetch latest version from Git tags (인자가 없을 때만) ────────────────────────────────
 if (-not $Version) {
     Write-Host "Fetching latest release for ${OsBuildType}..."
-    $TagsUrl = "https://api.github.com/repos/$GhRepo/tags?per_page=1"
-    $Tags    = Invoke-RestMethod -Uri $TagsUrl `
-        -Headers @{ 'Accept' = 'application/vnd.github+json'; 'User-Agent' = 'mju-dataset-installer' }
-    $Version = $Tags[0].name
+    $RemoteTags = & git ls-remote --tags --refs "https://github.com/$GhRepo.git" 2>$null
+    $Version = $RemoteTags |
+        ForEach-Object { ($_ -split '/', 2)[1] -replace '^refs/tags/', '' } |
+        Where-Object { $_ -match '^[0-9]+(\.[0-9]+){2,3}$' } |
+        Sort-Object { [version]$_ } |
+        Select-Object -Last 1
+
+    # Keep the API fallback for environments where git is unavailable.
     if (-not $Version) {
-        Write-Error "Failed to determine latest version from GitHub tags."
+        $TagsUrl = "https://api.github.com/repos/$GhRepo/tags?per_page=100"
+        $Tags = Invoke-RestMethod -Uri $TagsUrl `
+            -Headers @{ 'Accept' = 'application/vnd.github+json'; 'User-Agent' = 'mju-dataset-installer' }
+        $Version = $Tags.name |
+            Where-Object { $_ -match '^[0-9]+(\.[0-9]+){2,3}$' } |
+            Sort-Object { [version]$_ } |
+            Select-Object -Last 1
+    }
+
+    if (-not $Version) {
+        Write-Error "Failed to determine latest version from GitHub tags (git and API lookups failed)."
         exit 1
     }
 }
