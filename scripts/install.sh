@@ -4,7 +4,8 @@
 #
 # This script does NOT contain the labeling server address.
 # It fetches the latest release from the distribution API and downloads
-# the binary via a presigned URL.
+# the binary via a presigned URL. GitHub's REST API is only a fallback for
+# resolving the latest tag because unauthenticated API requests are rate-limited.
 set -e
 
 API_BASE="https://mjudcd-grac-api.newlearn.ai.kr"
@@ -25,6 +26,24 @@ json_get_string() {
 
   grep -m1 -o "\"${field}\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" \
     | sed 's/.*:[[:space:]]*"//;s/"$//;s/\\u0026/\&/g;s#\\/#/#g'
+}
+
+latest_numeric_version() {
+  awk '
+    function newer(a, b, i) {
+      split(a, part_a, "[.]")
+      split(b, part_b, "[.]")
+      for (i = 1; i <= 4; i++) {
+        if ((part_a[i] + 0) > (part_b[i] + 0)) return 1
+        if ((part_a[i] + 0) < (part_b[i] + 0)) return 0
+      }
+      return 0
+    }
+    /^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$/ {
+      if (latest == "" || newer($0, latest)) latest = $0
+    }
+    END { print latest }
+  '
 }
 
 # ── Detect OS ────────────────────────────────────────────────────────────────
@@ -57,12 +76,20 @@ VERSION="${1:-}"
 
 if [ -z "$VERSION" ]; then
   echo "Fetching latest release for ${OS_BUILD_TYPE}..."
-  VERSION=$(curl -fsSL "https://api.github.com/repos/${GH_REPO}/tags?per_page=1" \
-    -H "Accept: application/vnd.github+json" \
-    | json_get_string name)
+  VERSION=$(git ls-remote --tags --refs "https://github.com/${GH_REPO}.git" 2>/dev/null \
+    | awk -F/ '{ print $NF }' \
+    | latest_numeric_version)
+
+  # Keep the API fallback for environments where git is unavailable.
+  if [ -z "$VERSION" ]; then
+    VERSION=$(curl -fsSL "https://api.github.com/repos/${GH_REPO}/tags?per_page=100" \
+      -H "Accept: application/vnd.github+json" \
+      | json_get_string name \
+      | latest_numeric_version)
+  fi
 
   if [ -z "$VERSION" ]; then
-    echo "Failed to determine latest version from GitHub tags."
+    echo "Failed to determine latest version from GitHub tags (git and API lookups failed)."
     exit 1
   fi
 fi
